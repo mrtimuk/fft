@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html style="height:100%" lang="en">
+<head>
+	<meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width"/>
+    <style>
+        body {
+            background-color: #333;
+        }
+        .container {
+            max-width: 790px;
+            margin: 20px auto;
+            padding: 0px;
+        }
+        #vis {
+            margin: auto;
+            position: relative;
+            background-color: #000;
+            height: 450px;
+        }
+        .btnContainer {
+            position: absolute;
+            bottom: 50%;
+            width: 100%;
+            text-align: center;
+        }
+        #log {
+            padding: 1em;
+            font-size: 80%;
+            color: #dda;
+        }
+        #canv {
+            width: 100%;
+            height: 95%;
+        }
+        #scale {
+            width: 100%;
+            height: 5%;
+        }
+        #maxFreq {
+            font-family: sans-serif;
+            position: absolute;
+            font-size: 15px;
+            top: 10px;
+            right: 10px;
+            width: 75px;
+            color: #eb8;
+        }
+        .fs {
+            text-align: right;
+        }
+    </style> 
+</head>
+
+<body>
+<div class="container">
+    <div id="vis">
+        <canvas id="canv" width="512" height="360"></canvas>
+        <canvas id="scale" width="1024" height="30"></canvas>
+        <div id="maxFreq"></div>
+        <div class="btnContainer">
+            <button id="btnOpen">Start listening</button>
+        </div>
+    </div>
+    <div id="log"></div>
+</div>
+
+<script>
+const getUserMedia = (navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia)
+                        .bind(navigator);
+const elVis = document.getElementById("vis");
+const elLog = document.getElementById("log");
+const btnOpen = document.getElementById("btnOpen");
+const canv = document.getElementById("canv");
+const maxFreq = document.getElementById("maxFreq");
+
+const audioContext = new AudioContext();
+const analyserNode = audioContext.createAnalyser();
+
+log("Sample rate: " + Math.round(audioContext.sampleRate / 100) / 10 + ' KHz<br>');
+log("FFT bin count: " + analyserNode.frequencyBinCount + "<br>");
+const binSize = audioContext.sampleRate / (2 * analyserNode.frequencyBinCount);
+log("Bin size: " + Math.round(binSize * 100) / 100 + ' Hz<br>');
+const freqData = new Uint8Array(analyserNode.frequencyBinCount);
+const scale = 512 / Math.log(analyserNode.frequencyBinCount);
+console.log("Scale", scale);
+function log(m) { elLog.innerHTML += m; }
+
+// 48 KHz, 1024 bins
+// 1 bin = 23.49 Hz
+
+function freqToBin(f) {
+    return f / binSize
+}
+function binToX(b) {
+    return scale * Math.log(b+1);
+}
+function lineAt(ctx, f) {
+    const x = 2 * binToX(freqToBin(f));
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, 20);
+}
+
+function drawScale() {
+    const scale = document.getElementById("scale");
+    const ctx = scale.getContext("2d");
+    ctx.strokeStyle = "rgb(140,140,140)";
+    [10, 100, 1000].forEach(m =>
+        [1,2,3,4,5,6,7,8].forEach(i =>
+            lineAt(ctx, m * i)));
+    ctx.stroke();
+    ctx.fillStyle = "rgb(100,100,255)";
+    ctx.font = "20px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("10", 2 * binToX(freqToBin(10)), 20);
+    ctx.fillText("100", 2 * binToX(freqToBin(100)), 20);
+    ctx.fillText("1K", 2 * binToX(freqToBin(1000)), 20);
+    ctx.fillText("10K", 2 * binToX(freqToBin(10000)), 20);
+}
+drawScale();
+
+let freqs = [];
+let counter = 0;
+let nextSample = null;
+function render(time) {
+    analyserNode.getByteFrequencyData(freqData);
+    const context = canv.getContext("2d");
+    context.fillStyle = 'rgb(0,0,0,0.5)';
+    context.fillRect(0,0,512,360);
+
+    if (nextSample < time) {
+        freqs = Array.from(freqData).map((v, i) => ({f: (i+1) * 23.49, v: v}));
+        freqs = freqs.sort((kv1, kv2) => kv2.v - kv1.v);
+
+        let html = 'Peaks:<div class="fs">';
+        for (let i = 0; i < Math.min(freqs.length, 3); i++) {
+            html += Math.round(freqs[i].f) + " Hz<br>";
+        }
+        maxFreq.innerHTML = html + '</div>';
+        nextSample = time + 1000;
+    }
+    for (let i = 0; i < freqData.length; i++) {
+
+        const x = binToX(i);
+        const w = Math.max(1, binToX(i+1) - x);
+
+        const h = (250-Math.min(2*freqData[i],250));
+        context.fillStyle = 'hsl('+h+',100%,60%)';
+        context.fillRect(x, 358-1.2*freqData[i], w, 2);
+    }
+    
+    requestAnimationFrame(render);
+}
+
+function streamOpened(stream) {
+    log("done<br>");
+    btnOpen.style.display = 'none';
+    const sourceNode = audioContext.createMediaStreamSource(stream);
+    sourceNode.connect(analyserNode);
+    requestAnimationFrame(render);
+}
+function streamFailed(err) {
+    log("<br>Failed to open: " + err + "<br>");
+}
+function openAudio() {
+    log("Opening media..");
+    const spec = { audio: { optional: [{ echoCancellation: false }] } };
+    if (navigator.mediaDevices) {
+        navigator.mediaDevices.getUserMedia(spec).then(streamOpened, streamFailed);
+    } else {
+        getUserMedia(spec, streamOpened, streamFailed);
+    }
+}
+
+function handleVisibilityChange() {
+    if (document.hidden) {
+        audioContext.suspend();
+    } else {
+        audioContext.resume();
+    }
+}
+btnOpen.addEventListener("click", openAudio);
+document.addEventListener("visibilitychange", handleVisibilityChange, false);
+</script>
+</body>
+</html>
